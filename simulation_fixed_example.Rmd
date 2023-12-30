@@ -1,0 +1,263 @@
+---
+title: "simulation"
+author: "Xiyue Zhang"
+date: "2023-02-18"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Stan Code
+We pass the code as a string.
+```{r}
+stanmodelcode <-'
+/* lg_t.stan */
+functions {
+// Vector square root
+vector vecsqrt(vector x) {
+	vector[dims(x)[1]] res;
+	for (m in 1:dims(x)[1]){
+		res[m] = sqrt(x[m]);
+	}
+return res; }
+}
+data {
+  int<lower=0> N; 
+  int<lower=0> J;    
+  matrix[N,J] Z;
+  vector[N] X; 
+  vector[N] Y; 
+}
+parameters {
+  real <lower=0> sigmax; 
+  real <lower=0> sigmay;
+  real <lower=0> sigmaalpha;
+  real<lower=0> r1_global;
+  real<lower=0> r2_global;
+  real mualpha;
+  real omegax;
+  real omegay;
+  real deltax;
+  real deltay;
+  real theta;
+  vector[N] u; 
+  vector[J] z;
+  vector<lower=0>[J] r1_local;
+  vector<lower=0>[J] r2_local;
+  vector[J] alpha;
+}
+transformed parameters {
+   real<lower=0> tau;
+   vector<lower=0> [J] lambda;
+   vector[J] beta;
+   tau      = r1_global * sqrt(r2_global);
+   lambda	  = r1_local .* vecsqrt(r2_local);
+   beta	    =  z .* lambda*tau;
+}
+model {
+  X 	~ normal(omegax+Z*alpha+u*deltax, sigmax);
+  Y 	~ normal(omegay+Z*beta+X*theta+u*deltay, sigmay);
+  u 	~ normal(0,1);
+  
+  for(k in 1:J){
+    alpha[k] ~ normal(mualpha, sigmaalpha);
+  }
+// Constructing the prior for the lambda vector
+    z ~ normal(0, 1);
+    r1_local ~ normal(0.0, 1.0);
+    r2_local ~ inv_gamma(0.5, 0.5);
+// Constructing the prior for tau
+    r1_global ~ normal(0.0, 1.0);
+    r2_global ~ inv_gamma(0.5, 0.5);
+    }
+'
+```
+# generate function
+The function is to generate the data based on our simulation rules.
+```{r}
+generate <- function(N,J,THETA,Z,deltamin,deltamax,deltaxsd,deltaysd,sigmaxmin,
+            sigmaxmax,sigmaymin,sigmaymax,fracnonzeroAlpha,alphamean,alphasd,
+            omegaxmean,omegaymean,omegaxsd,omegaysd,pleiotropy,pleiomin,
+            pleiomax,fractionpleiotropic,pleiosd){
+U 				= array(rnorm(N, mean=0, sd=1), dim = N)
+MEANDELTA = runif(1, deltamin, deltamax)
+DELTAX 		= rnorm(1, mean= MEANDELTA, sd=deltaxsd)
+DELTAY 		= rnorm(1, mean= MEANDELTA, sd=deltaysd)
+nonzeroAlpha  = round(fracnonzeroAlpha*J)
+ALPHA = array(rep(0,J),dim=J)
+ALPHA[sample(c(1:J),size=nonzeroAlpha,prob=rep(1,J),replace=F)] = 
+          rnorm(nonzeroAlpha, mean= alphamean, sd=alphasd)
+OMEGAX 		= rnorm(1,mean=omegaxmean,sd=omegaxsd)
+OMEGAY 		= rnorm(1,mean=omegaymean,sd=omegaysd)
+X 				= array(Z%*%ALPHA, dim = N)
+X 				= X+OMEGAX+U*DELTAX
+SIGMAX		= runif(1,sigmaxmin,sigmaxmax)
+EPS 			= array(rnorm(N, mean=0, sd=SIGMAX), dim=N)
+X 			  = X+EPS
+MEANPLEIO = 0
+PLEIO 		= runif(1,pleiomin,pleiomax)
+if(pleiotropy == "POSITIVE")MEANPLEIO = PLEIO
+if(pleiotropy == "NEGATIVE")MEANPLEIO = -PLEIO
+BETA = array(rep(0,J), dim=J)
+HOWMANYPLEIOTROPIC = round(fractionpleiotropic*J)
+BETA[sample(c(1:J),size=HOWMANYPLEIOTROPIC,prob=rep(1,J),replace=F)] = 
+          rnorm(HOWMANYPLEIOTROPIC,mean=MEANPLEIO,sd=pleiosd)
+SIGMAY 		= runif(1,sigmaymin,sigmaymax)
+EPSILON 	= array(rnorm(N, mean=0, sd=SIGMAY), dim=c(N,1))
+esposizione 	= array(X*THETA, dim=c(N,1))
+confo		= array(U*DELTAY, dim= c(N,1))
+YBUF 		= OMEGAY+Z%*%BETA+esposizione+confo
+YBUF 		= YBUF+EPSILON
+Y 			= array(YBUF, dim=N)
+dataset= list(X=X,Y=Y,Z=Z,U=U)
+dataset
+}
+```
+library loaded
+```{r}
+library(StanHeaders)
+library(ggplot2)
+library(rstan)
+library(MendelianRandomization)
+```
+
+```{r}
+f = function(X1)gsub("0\\.","\\.", X1)
+```
+# load matrix
+The author did not upload the data, so we just generate a matrix with same dimension to test the code. 
+Note: why a "random" matrix can still justify the result?
+```{r}
+Z<-matrix(nrow = 500,ncol=60)
+n<-60
+p<-runif(30000)
+for (i in 1:500){
+  for(j in 1:60){
+    Z[i,j]<-rbinom(1,2,p[i])
+  }
+}
+J = ncol(Z)
+N = nrow(Z)
+```
+The average SNP-SNP correlation in this
+particular set of data.
+```{r}
+mean(cor(Z))
+```
+# Experiment
+use the experiment code provided
+```{r}
+THETA = 0.35
+```
+
+
+```{r}
+simulated = generate(N,J,THETA,Z,
+deltamin =-0.2,
+deltamax =-0.1,
+deltaxsd =0.02,
+deltaysd =0.02,
+sigmaxmin =0.05,
+sigmaxmax = 0.15,
+sigmaymin = 0.2,
+sigmaymax = 0.4,
+fracnonzeroAlpha = 0.3,
+alphamean = 1.0, #-0.07
+alphasd = 0.2,
+omegaxmean = 3.3,
+omegaymean = 0.9,
+omegaxsd = 0.2,
+omegaysd = 0.2,
+pleiotropy = "POSITIVE",
+pleiomin = -0.1,#0.006,
+pleiomax = 0.3,#0.25, #0.36, #0.012,
+fractionpleiotropic = 0.49,
+pleiosd = 0.1#0.05
+)
+```
+
+```{r}
+X = array(simulated$X, dim = N)
+Y = array(simulated$Y, dim = N)
+Z = array(simulated$Z, dim = c(N,J))
+U= array(simulated$U, dim = N)
+```
+
+```{r}
+betaX <- array(NA, dim=J)
+betaY <- array(NA, dim=J)
+sebetaY <- array(NA, dim=J)
+sebetaX <- array(NA, dim=J)
+for(isnp in 1:J){
+regX <- lm(X ~ Z[,isnp])
+regY <- lm(Y ~ Z[,isnp])
+betaX[isnp] <- summary(regX)$coefficients[2,1]
+sebetaX[isnp] <- summary(regX)$coefficients[2,2]
+betaY[isnp] <- summary(regY)$coefficients[2,1]
+sebetaY[isnp] <- summary(regY)$coefficients[2,2]
+}
+```
+
+
+```{r}
+oggetto = mr_input(bx = as.numeric(betaX),
+  bxse = as.numeric(sebetaX),
+  by = as.numeric(betaY),
+  byse = as.numeric(sebetaY),
+  correlation = cor(Z),
+  exposure = "X ", outcome = "Y",
+          snps = colnames(Z))
+```
+
+
+
+```{r}
+risultato = mr_allmethods(oggetto, method = "all")
+thetamedianestimate = risultato$Values[2,2]
+thetamedianestimate
+```
+```{r}
+init_list = list(c1=list(theta=thetamedianestimate,
+  beta=rep(0,J),alpha=betaX,deltax=0,
+  deltay=0,u=rep(0,N)))
+```
+
+```{r}
+dat = list(N=N, J=J,Z=Z,X=X,Y=Y)
+```
+
+
+
+# Stan 
+```{r}
+fit <- stan(model_code=stanmodelcode, data = dat,iter=1000,
+  chains=1, init=init_list, verbose=F)
+```
+```{r}
+theta = extract(fit,pars='theta',permuted=FALSE)
+```
+
+
+```{r}
+motheta = monitor(theta)
+```
+```{r}
+motheta
+```
+
+95\% confidence interval
+```{r}
+ cat("\n (", motheta[,4],",",
++     + motheta[,8],")",sep="")
+```
+Its posterior mean is:
+```{r}
+motheta[,6]
+```
+
+
+
