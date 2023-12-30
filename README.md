@@ -1,3 +1,9 @@
+# Fork Update
+
+This fork of the repository addresses minor issues found in the original code, particularly in the R Stan code section. The updates ensure that the R Stan code now functions as intended, enhancing the reliability and accuracy of the statistical analysis. For detailed insights and usage, refer to the updated R Markdown file in this repository. The knitted pdf is also uploaded.
+
+We allow the existence of correlation, thus I generate a random data matrix. Theoretically, it would not change the conclusion.
+
 # BMR
 CONTEXT: Many statistical studies aim to assess the causal effect of a phenotype or exposure, X, on an outcome Y. In many such studies
 an experimental design is unfeasible, and the only remaining option is to work on the basis of observational data. Unfortunately in
